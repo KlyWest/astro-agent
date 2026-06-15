@@ -203,16 +203,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "week":
         await query.edit_message_text("Строю прогноз на неделю...")
-        forecasts = []
+        now_utc = datetime.utcnow()
+        msk = pytz.timezone("Europe/Moscow")
+        days_data = []
         for i in range(7):
             day = now_utc + timedelta(days=i)
             transits = get_transit_positions(day)
             aspects = find_aspects(transits)
             label = (datetime.now(msk) + timedelta(days=i)).strftime("%d.%m")
-            forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
+            transit_text = "\n".join(
+                f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
+                for n, d in transits.items()
+            )
+            aspect_text = "\n".join(aspects) if aspects else "Нет значимых аспектов."
+            days_data.append(f"=== {label} ===\nТранзиты:\n{transit_text}\nАспекты:\n{aspect_text}")
+
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        combined = "\n\n".join(days_data)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": build_system_prompt()},
+                {"role": "user", "content": f"Составь прогноз на каждый из 7 дней. Для каждого дня — отдельный абзац с датой, ключевыми транзитами и конкретными рекомендациями. Без клише.\n\n{combined}"},
+            ],
+            temperature=0.7,
+            max_tokens=2000,
+        )
+        text = response.choices[0].message.content
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="📆 Прогноз на неделю\n\n" + "\n\n".join(forecasts)
+            text="📆 Прогноз на неделю\n\n" + text
         )
 
     elif query.data == "month":
