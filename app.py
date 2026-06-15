@@ -100,11 +100,29 @@ def find_aspects(transits):
                 orb_use = min(orb, orb_transit)
                 if abs(diff - asp_deg) <= orb_use:
                     exact = round(abs(diff - asp_deg), 2)
-                    hits.append(
-                        f"транзитный {t_name} {asp_name} натальный {n_name} "
-                        f"(орб {exact}°, {t_data['sign']} {t_data['deg']}°)"
-                    )
+                    # определяем сходящийся или расходящийся
+                    direction = "сход." if t_data["deg_abs"] < n_data["deg"] else "расход."
+                    hits.append({
+                        "text": f"транзитный {t_name} {asp_name} натальный {n_name} (орб {exact}°, {direction})",
+                        "orb": exact,
+                        "direction": direction,
+                        "fast_to_slow": t_name in ["Луна", "Меркурий", "Венера", "Солнце", "Марс"]
+                                        and n_name in ["Сатурн", "Уран", "Нептун", "Плутон"],
+                    })
+    # сортируем по орбу, расходящиеся помечаем
+    hits.sort(key=lambda x: x["orb"])
     return hits
+
+def format_aspects(hits):
+    result = []
+    for h in hits:
+        note = ""
+        if h["direction"] == "расход." and h["orb"] > 0.5:
+            note = " [расходящийся — событие уже позади]"
+        if h["fast_to_slow"]:
+            note += " [быстрая по медленной — фоновый эффект]"
+        result.append(h["text"] + note)
+    return result
 
 def build_natal_summary():
     lines = ["Натальная карта: Олли, 17.11.1990, 13:20, Астрахань",
@@ -118,37 +136,62 @@ def build_natal_summary():
 
 def build_system_prompt():
     natal = build_natal_summary()
-    return f"""Ты — опытный астролог-практик, работающий в традиции эллинистической и средневековой астрологии.
-Твой клиент — Олли, женщина.
+    return f"""Ты — профессиональный астролог с 20-летним опытом практики. Работаешь в традиции эллинистической и средневековой астрологии. Твой клиент — Олли, женщина.
 
 {natal}
 
-Правила составления прогноза:
-1. Никаких клише ("звёзды благоволят", "будь осторожен"). Только конкретика.
-2. Каждое утверждение — астрологический аргумент: какой транзит, к какой точке, орб.
-3. Учитывай эссенциальные и акцидентальные достоинства планет.
-4. Упоминай ретроградность если есть.
-5. Говори о реальных темах домов конкретно для этого человека.
-6. Значимые транзиты (орб до 1°) — выдели как ключевые.
-7. Живой язык, на "ты", без пафоса.
-8. Структура дня: общий тон → ключевые транзиты → на что обратить внимание → чего не делать."""
+ЖЁСТКИЕ ПРАВИЛА — нарушение недопустимо:
 
-def generate_forecast(period_label, transits, aspects):
+1. ПРИОРИТЕТЫ ТРАНЗИТОВ:
+   — Медленные планеты по натальным точкам (Сатурн, Уран, Нептун, Плутон транзитом) — главное, описывай подробно
+   — Юпитер и Марс транзитом — среднее значение
+   — Быстрые планеты (Луна, Меркурий, Венера, Солнце) по медленным натальным (Сатурн, Уран, Нептун, Плутон) — незначительный фон, упоминай вскользь или не упоминай вовсе
+   — Расходящийся аспект с орбом больше 1° — событие уже произошло, не акцентируй
+   — Сходящийся аспект с орбом до 1° — пиковое влияние прямо сейчас, выдели отдельно
+
+2. ФОРМАТ ПРОГНОЗА:
+   — Никаких клише: "звёзды благоволят", "будь осторожен", "прекрасное время", "энергия дня"
+   — Никакой воды и общих фраз
+   — Каждое утверждение = конкретное астрологическое основание
+   — Пиши на двух уровнях: психологический (что происходит внутри) и событийный (что может случиться снаружи)
+   — Не "плохое настроение" а "возможен конфликт с коллегой или близким — Марс транзитом квадрат натальному Меркурию в 9 доме активирует раздражение в коммуникациях"
+   — Язык живой, на "ты", без пафоса и астрологического жаргона там где без него можно обойтись
+
+3. СТРУКТУРА ДНЯ:
+   — Одна фраза: общий тон (не абстрактно — конкретно что доминирует)
+   — Ключевые транзиты (только значимые, орб до 2°, с приоритетом по правилу выше)
+   — Психологический уровень: что ты чувствуешь и почему
+   — Событийный уровень: что может произойти конкретно
+   — Одна строка: чего лучше не делать и почему астрологически
+
+4. РАЗГОВОРНЫЙ РЕЖИМ:
+   — Если пользователь задаёт уточняющий вопрос после прогноза — отвечай по существу, не повторяй прогноз
+   — Если спрашивает про конкретную тему (работа, отношения, здоровье) — фокусируйся на домах и планетах связанных с этой темой
+   — Если спрашивает про конкретную дату — анализируй транзиты на ту дату
+
+5. ЗАПРЕЩЕНО:
+   — Повторять одно и то же в разные дни если планеты не изменились
+   — Писать про быстрые транзиты по медленным натальным как про важные события
+   — Заканчивать фразами "всё будет хорошо", "доверяй себе", "слушай интуицию"
+"""
+
+def generate_forecast(period_label, transits, aspects_raw):
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     transit_text = "\n".join(
         f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
         for n, d in transits.items()
     )
-    aspect_text = "\n".join(aspects) if aspects else "Значимых аспектов нет."
+    formatted = format_aspects(aspects_raw)
+    aspect_text = "\n".join(formatted) if formatted else "Значимых аспектов нет."
     user_msg = f"""Составь прогноз на {period_label}.
 
 Транзитные планеты:
 {transit_text}
 
-Активные аспекты к натальной карте:
+Активные аспекты (отсортированы по орбу, помечены приоритеты):
 {aspect_text}
 
-Дай развёрнутый конкретный прогноз."""
+Применяй правила приоритетов строго."""
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -161,6 +204,12 @@ def generate_forecast(period_label, transits, aspects):
     )
     return response.choices[0].message.content
 
+def send_chunks(text, chat_id, bot_send_func):
+    """Разбивает длинный текст на части по 3800 символов"""
+    chunk_size = 3800
+    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    return chunks
+
 # ─── TELEGRAM ──────────────────────────────────────────────────────
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -172,14 +221,18 @@ async def send_daily_forecast(bot):
     aspects = find_aspects(transits)
     today_str = datetime.now(pytz.timezone("Europe/Moscow")).strftime("%d.%m.%Y")
     text = generate_forecast(today_str, transits, aspects)
-    await bot.send_message(chat_id=CHAT_ID, text=f"🌙 Прогноз на {today_str}\n\n{text}")
+    full = f"🌙 Прогноз на {today_str}\n\n{text}"
+    for chunk in send_chunks(full, CHAT_ID, None):
+        await bot.send_message(chat_id=CHAT_ID, text=chunk)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("📅 Прогноз на сегодня", callback_data="today")],
-        [InlineKeyboardButton("📆 На неделю", callback_data="week"),
-         InlineKeyboardButton("🗓 На месяц", callback_data="month")],
-        [InlineKeyboardButton("📊 На год", callback_data="year")],
+        [InlineKeyboardButton("📅 Сегодня", callback_data="today"),
+         InlineKeyboardButton("📅 Завтра", callback_data="tomorrow")],
+        [InlineKeyboardButton("📆 Неделя", callback_data="week"),
+         InlineKeyboardButton("🗓 Месяц", callback_data="month")],
+        [InlineKeyboardButton("📊 Год", callback_data="year"),
+         InlineKeyboardButton("📌 Дата", callback_data="custom_date")],
     ]
     await update.message.reply_text(
         "Привет, Олли. Я твой личный астролог.\n\nЧто хочешь узнать?",
@@ -198,13 +251,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = datetime.now(msk).strftime("%d.%m.%Y")
         await query.edit_message_text("Считаю транзиты...")
         text = generate_forecast(label, transits, aspects)
-        await context.bot.send_message(chat_id=query.message.chat_id,
-                                       text=f"📅 {label}\n\n{text}")
+        full = f"📅 {label}\n\n{text}"
+        for chunk in send_chunks(full, query.message.chat_id, None):
+            await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
+
+    elif query.data == "tomorrow":
+        day = now_utc + timedelta(days=1)
+        transits = get_transit_positions(day)
+        aspects = find_aspects(transits)
+        label = (datetime.now(msk) + timedelta(days=1)).strftime("%d.%m.%Y")
+        await query.edit_message_text("Считаю транзиты...")
+        text = generate_forecast(label, transits, aspects)
+        full = f"📅 Завтра {label}\n\n{text}"
+        for chunk in send_chunks(full, query.message.chat_id, None):
+            await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
 
     elif query.data == "week":
         await query.edit_message_text("Строю прогноз на неделю...")
-        now_utc = datetime.utcnow()
-        msk = pytz.timezone("Europe/Moscow")
         days_data = []
         for i in range(7):
             day = now_utc + timedelta(days=i)
@@ -215,7 +278,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
                 for n, d in transits.items()
             )
-            aspect_text = "\n".join(aspects) if aspects else "Нет значимых аспектов."
+            formatted = format_aspects(aspects)
+            aspect_text = "\n".join(formatted) if formatted else "Нет значимых аспектов."
             days_data.append(f"=== {label} ===\nТранзиты:\n{transit_text}\nАспекты:\n{aspect_text}")
 
         client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -224,35 +288,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": build_system_prompt()},
-                {"role": "user", "content": f"Составь прогноз на каждый из 7 дней. Для каждого дня — отдельный абзац с датой, ключевыми транзитами и конкретными рекомендациями. Без клише.\n\n{combined}"},
+                {"role": "user", "content": f"Составь прогноз на каждый из 7 дней. Для каждого дня — отдельный абзац с датой. Только значимые транзиты. Психологический и событийный уровень. Без клише и воды.\n\n{combined}"},
             ],
             temperature=0.7,
-            max_tokens=2000,
+            max_tokens=2500,
         )
         text = response.choices[0].message.content
-        full_text = "📆 Прогноз на неделю\n\n" + text
-        chunk_size = 3800
-        chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-        for chunk in chunks:
+        full = "📆 Прогноз на неделю\n\n" + text
+        for chunk in send_chunks(full, query.message.chat_id, None):
             await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
 
     elif query.data == "month":
-        await query.edit_message_text("Строю прогноз на месяц (займёт минуту)...")
-        forecasts = []
-        for i in [1, 5, 10, 15, 20, 25, 30]:
+        await query.edit_message_text("Строю прогноз на месяц (одну минуту)...")
+        days_data = []
+        for i in [0, 7, 14, 21, 28]:
             day = now_utc + timedelta(days=i)
             transits = get_transit_positions(day)
             aspects = find_aspects(transits)
             label = (datetime.now(msk) + timedelta(days=i)).strftime("%d.%m")
-            forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="🗓 Ключевые дни месяца\n\n" + "\n\n".join(forecasts)
+            transit_text = "\n".join(
+                f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
+                for n, d in transits.items()
+            )
+            formatted = format_aspects(aspects)
+            aspect_text = "\n".join(formatted) if formatted else "Нет значимых аспектов."
+            days_data.append(f"=== {label} ===\nТранзиты:\n{transit_text}\nАспекты:\n{aspect_text}")
+
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        combined = "\n\n".join(days_data)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": build_system_prompt()},
+                {"role": "user", "content": f"Составь прогноз на месяц по ключевым неделям. Для каждой недели — абзац. Акцент на медленных транзитах и трендах. Психологический и событийный уровень.\n\n{combined}"},
+            ],
+            temperature=0.7,
+            max_tokens=2500,
         )
+        text = response.choices[0].message.content
+        full = "🗓 Прогноз на месяц\n\n" + text
+        for chunk in send_chunks(full, query.message.chat_id, None):
+            await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
 
     elif query.data == "year":
-        await query.edit_message_text("Строю годовой прогноз...")
-        forecasts = []
+        await query.edit_message_text("Строю годовой прогноз (2-3 минуты)...")
+        days_data = []
         for m in range(1, 13):
             try:
                 day = now_utc.replace(month=m, day=1)
@@ -263,14 +343,91 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             transits = get_transit_positions(day)
             aspects = find_aspects(transits)
             label = day.strftime("%B %Y")
-            forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="📊 Прогноз на год\n\n" + "\n\n".join(forecasts)
+            transit_text = "\n".join(
+                f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
+                for n, d in transits.items()
+            )
+            formatted = format_aspects(aspects)
+            aspect_text = "\n".join(formatted) if formatted else "Нет значимых аспектов."
+            days_data.append(f"=== {label} ===\nТранзиты:\n{transit_text}\nАспекты:\n{aspect_text}")
+
+        client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        combined = "\n\n".join(days_data)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": build_system_prompt()},
+                {"role": "user", "content": f"Составь годовой прогноз по месяцам. Акцент на медленных транзитах — Сатурн, Уран, Нептун, Плутон. Тренды и ключевые периоды. Для каждого месяца — короткий абзац.\n\n{combined}"},
+            ],
+            temperature=0.7,
+            max_tokens=3000,
         )
+        text = response.choices[0].message.content
+        full = "📊 Прогноз на год\n\n" + text
+        for chunk in send_chunks(full, query.message.chat_id, None):
+            await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
+
+    elif query.data == "custom_date":
+        await query.edit_message_text(
+            "Напиши дату в формате ДД.ММ.ГГГГ или период ДД.ММ.ГГГГ-ДД.ММ.ГГГГ\n\nНапример: 17.08.2026"
+        )
+        context.user_data["waiting_for_date"] = True
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
+
+    # Обработка пользовательской даты
+    if context.user_data.get("waiting_for_date"):
+        context.user_data["waiting_for_date"] = False
+        msk = pytz.timezone("Europe/Moscow")
+        try:
+            if "-" in user_text and user_text.count(".") >= 4:
+                # период
+                parts = user_text.split("-")
+                date_from = datetime.strptime(parts[0].strip(), "%d.%m.%Y")
+                date_to = datetime.strptime(parts[1].strip(), "%d.%m.%Y")
+                days_data = []
+                current = date_from
+                step = max(1, (date_to - date_from).days // 5)
+                while current <= date_to:
+                    dt_utc = current.replace(tzinfo=pytz.utc)
+                    transits = get_transit_positions(dt_utc)
+                    aspects = find_aspects(transits)
+                    label = current.strftime("%d.%m")
+                    transit_text = "\n".join(f"{n}: {d['sign']} {d['deg']}°" for n, d in transits.items())
+                    formatted = format_aspects(aspects)
+                    aspect_text = "\n".join(formatted) if formatted else "Нет значимых аспектов."
+                    days_data.append(f"=== {label} ===\n{transit_text}\n{aspect_text}")
+                    current += timedelta(days=step)
+                client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                combined = "\n\n".join(days_data)
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": build_system_prompt()},
+                        {"role": "user", "content": f"Прогноз на период {user_text}. Ключевые тренды и события.\n\n{combined}"},
+                    ],
+                    temperature=0.7, max_tokens=2000,
+                )
+                text = response.choices[0].message.content
+                full = f"📌 Период {user_text}\n\n{text}"
+            else:
+                # один день
+                target = datetime.strptime(user_text.strip(), "%d.%m.%Y")
+                dt_utc = target.replace(tzinfo=pytz.utc)
+                transits = get_transit_positions(dt_utc)
+                aspects = find_aspects(transits)
+                text = generate_forecast(user_text.strip(), transits, aspects)
+                full = f"📌 {user_text}\n\n{text}"
+
+            for chunk in send_chunks(full, update.message.chat_id, None):
+                await update.message.reply_text(chunk)
+            return
+        except ValueError:
+            await update.message.reply_text("Не смогла распознать дату. Попробуй формат ДД.ММ.ГГГГ")
+            return
+
+    # Обычный разговорный режим
     conversation_history.append({"role": "user", "content": user_text})
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     now_utc = datetime.utcnow()
@@ -290,7 +447,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     reply = response.choices[0].message.content
     conversation_history.append({"role": "assistant", "content": reply})
-    await update.message.reply_text(reply)
+    for chunk in send_chunks(reply, update.message.chat_id, None):
+        await update.message.reply_text(chunk)
 
 # ─── FLASK ─────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
@@ -311,7 +469,6 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host="0.0.0.0", port=port)
 
-# ─── MAIN ──────────────────────────────────────────────────────────
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
