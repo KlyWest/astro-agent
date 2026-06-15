@@ -14,13 +14,6 @@ import pytz
 # ─── НАТАЛЬНАЯ КАРТА ───────────────────────────────────────────────
 NATAL = {
     "name": "Олли",
-    "date": (1990, 11, 17),
-    "time": (10, 20, 0),  # UTC (13:20 GMT+3 = 10:20 UTC)
-    "city": "Астрахань",
-    "lat": 46.3497,
-    "lon": 48.0408,
-    "asc": 8.97,
-    "mc": 260.13,
     "planets_natal": {
         "Солнце":    {"sign": "Скорпион", "deg": 234.80, "house": 8,  "status": "эссенц. -5, акцид. 0"},
         "Луна":      {"sign": "Скорпион", "deg": 235.38, "house": 8,  "status": "эссенц. -3, акцид. -7, падение"},
@@ -81,7 +74,7 @@ def deg_to_sign(deg):
 
 def get_transit_positions(dt_utc):
     jd = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day,
-                    dt_utc.hour + dt_utc.minute/60)
+                    dt_utc.hour + dt_utc.minute / 60)
     positions = {}
     for name, pid in PLANET_IDS.items():
         pos, _ = swe.calc_ut(jd, pid)
@@ -114,10 +107,10 @@ def find_aspects(transits):
     return hits
 
 def build_natal_summary():
-    lines = [f"Натальная карта: {NATAL['name']}, {NATAL['date']}, {NATAL['city']}",
+    lines = ["Натальная карта: Олли, 17.11.1990, 13:20, Астрахань",
              "ASC Рыбы 8°58, MC Стрелец 20°08", ""]
     for p, d in NATAL["planets_natal"].items():
-        r = " [ретро]" if "ретро" in d.get("status","") else ""
+        r = " [ретро]" if "ретро" in d.get("status", "") else ""
         lines.append(f"{p}: {d['sign']} {d['deg']}°, дом {d['house']}{r} ({d['status']})")
     lines += ["", "Натальные аспекты:"] + NATAL["aspects_natal"]
     lines += ["", "Особенности:", NATAL["special"]]
@@ -173,13 +166,13 @@ CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 conversation_history = []
 
-async def send_daily_forecast(app):
+async def send_daily_forecast(bot):
     now_utc = datetime.utcnow()
     transits = get_transit_positions(now_utc)
     aspects = find_aspects(transits)
     today_str = datetime.now(pytz.timezone("Europe/Moscow")).strftime("%d.%m.%Y")
     text = generate_forecast(today_str, transits, aspects)
-    await app.bot.send_message(chat_id=CHAT_ID, text=f"🌙 Прогноз на {today_str}\n\n{text}")
+    await bot.send_message(chat_id=CHAT_ID, text=f"🌙 Прогноз на {today_str}\n\n{text}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -217,8 +210,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             aspects = find_aspects(transits)
             label = (datetime.now(msk) + timedelta(days=i)).strftime("%d.%m")
             forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
-        await context.bot.send_message(chat_id=query.message.chat_id,
-                                       text="📆 Прогноз на неделю\n\n" + "\n\n".join(forecasts))
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="📆 Прогноз на неделю\n\n" + "\n\n".join(forecasts)
+        )
 
     elif query.data == "month":
         await query.edit_message_text("Строю прогноз на месяц (займёт минуту)...")
@@ -229,21 +224,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             aspects = find_aspects(transits)
             label = (datetime.now(msk) + timedelta(days=i)).strftime("%d.%m")
             forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
-        await context.bot.send_message(chat_id=query.message.chat_id,
-                                       text="🗓 Ключевые дни месяца\n\n" + "\n\n".join(forecasts))
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="🗓 Ключевые дни месяца\n\n" + "\n\n".join(forecasts)
+        )
 
     elif query.data == "year":
         await query.edit_message_text("Строю годовой прогноз...")
         forecasts = []
         for m in range(1, 13):
-            day = now_utc.replace(month=m, day=1) if m >= now_utc.month else \
-                  now_utc.replace(year=now_utc.year+1, month=m, day=1)
+            try:
+                day = now_utc.replace(month=m, day=1)
+                if day < now_utc:
+                    day = day.replace(year=now_utc.year + 1)
+            except ValueError:
+                continue
             transits = get_transit_positions(day)
             aspects = find_aspects(transits)
             label = day.strftime("%B %Y")
             forecasts.append(f"── {label} ──\n{generate_forecast(label, transits, aspects)}")
-        await context.bot.send_message(chat_id=query.message.chat_id,
-                                       text="📊 Прогноз на год\n\n" + "\n\n".join(forecasts))
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="📊 Прогноз на год\n\n" + "\n\n".join(forecasts)
+        )
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -256,6 +259,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for n, d in transits.items()
     )
     messages = [{"role": "system", "content": build_system_prompt()}] + conversation_history[-10:]
+    messages[-1] = dict(messages[-1])
     messages[-1]["content"] += f"\n\n[Текущие транзиты:\n{transit_text}]"
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -267,7 +271,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_history.append({"role": "assistant", "content": reply})
     await update.message.reply_text(reply)
 
-# ─── FLASK + KEEP ALIVE ────────────────────────────────────────────
+# ─── FLASK ─────────────────────────────────────────────────────────
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -279,26 +283,32 @@ def keep_alive():
     if url:
         try:
             requests.get(url, timeout=10)
-        except:
+        except Exception:
             pass
 
 def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
 
+# ─── MAIN ──────────────────────────────────────────────────────────
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(send_daily_forecast, "cron", hour=8, minute=0, args=[app])
+    scheduler.add_job(send_daily_forecast, "cron", hour=8, minute=0,
+                      kwargs={"bot": app.bot})
     scheduler.add_job(keep_alive, "interval", minutes=10)
     scheduler.start()
+
     threading.Thread(target=run_flask, daemon=True).start()
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await asyncio.Event().wait()
+
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
