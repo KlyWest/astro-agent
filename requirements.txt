@@ -1,8 +1,8 @@
 flask
 pyswisseph
-anthropic
-python-telegram-bot==21.3
-apscheduler
-requests
 groq
+anthropic
+python-telegram-bot==20.3
+apscheduler==3.10.4
+requests
 pytz
