@@ -307,7 +307,7 @@ async def main():
 
     async with app:
         await app.start()
-        await app.updater.start_polling()
+        await app.updater.start_polling(drop_pending_updates=True)
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
