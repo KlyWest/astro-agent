@@ -230,10 +230,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             max_tokens=2000,
         )
         text = response.choices[0].message.content
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="📆 Прогноз на неделю\n\n" + text
-        )
+        full_text = "📆 Прогноз на неделю\n\n" + text
+        chunk_size = 3800
+        chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
+        for chunk in chunks:
+            await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
 
     elif query.data == "month":
         await query.edit_message_text("Строю прогноз на месяц (займёт минуту)...")
