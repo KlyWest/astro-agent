@@ -368,26 +368,40 @@ def generate_forecast(period_label, transits, aspects_raw):
     )
     formatted = format_aspects_for_prompt(aspects_raw)
     aspect_text = "\n".join(formatted) if formatted else "Значимых аспектов нет."
-    user_msg = f"""Составь прогноз на {period_label}.
+
+    base_data = f"""Дата прогноза: {period_label}
 
 Транзитные планеты:
 {transit_text}
 
-Активные аспекты (сортировка по приоритету и орбу):
-{aspect_text}
+Активные аспекты (отсортированы по приоритету и орбу — используй ТОЛЬКО эти данные, ничего не придумывай):
+{aspect_text}"""
 
-Строго соблюдай структуру и правила приоритетов."""
-
-    response = client.chat.completions.create(
+    # Запрос 1: приветствие + список + общая картина
+    intro_response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": build_system_prompt()},
-            {"role": "user", "content": user_msg},
+            {"role": "system", "content": build_system_prompt(mode="intro")},
+            {"role": "user", "content": f"{base_data}\n\nСоставь приветствие, полный список транзитов и общую картину дня. Используй ТОЛЬКО переданные аспекты, не добавляй других."},
         ],
-        temperature=0.7,
-        max_tokens=2000,
+        temperature=0.6,
+        max_tokens=1200,
     )
-    return response.choices[0].message.content
+    intro_text = intro_response.choices[0].message.content
+
+    # Запрос 2: только сферы
+    spheres_response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": build_system_prompt(mode="spheres")},
+            {"role": "user", "content": f"{base_data}\n\nСоставь блок СФЕР (Отношения/Работа/Здоровье/Финансы) и Луну без курса если применимо. Для каждой сферы используй ТОЛЬКО те аспекты из списка выше, которые касаются домов этой сферы. Если для сферы нет релевантных аспектов — напиши короткую фразу о фоне, не повторяй один и тот же текст для разных сфер."},
+        ],
+        temperature=0.6,
+        max_tokens=1500,
+    )
+    spheres_text = spheres_response.choices[0].message.content
+
+    return f"{intro_text}\n\n{spheres_text}"
 
 def send_chunks(text, chat_id=None, bot_send_func=None):
     chunk_size = 3800
