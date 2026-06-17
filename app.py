@@ -112,16 +112,31 @@ def get_transit_positions(dt_utc):
         }
     return positions
 
+FICTITIOUS_POINTS = ["Сев.Узел", "Лилит", "Хирон", "Фортуна"]
+
 def find_aspects(transits):
     hits = []
     for t_name, t_data in transits.items():
+        t_is_fictitious = t_name in FICTITIOUS_POINTS
         orb_rules = ORB_TABLE.get(t_name, {"соединение": 2, "оппозиция": 2, "трин": 2, "квадрат": 2, "секстиль": 2})
+
         for n_name, n_data in NATAL["planets_natal"].items():
+            n_is_fictitious = n_name in FICTITIOUS_POINTS
+
             diff = abs(t_data["deg_abs"] - n_data["deg"]) % 360
             if diff > 180:
                 diff = 360 - diff
+
             for asp_name, asp_deg in ASPECTS.items():
+                # Если транзитная ИЛИ натальная точка фиктивная — разрешено только соединение
+                if (t_is_fictitious or n_is_fictitious) and asp_name != "соединение":
+                    continue
+
                 orb_allowed = orb_rules.get(asp_name, 2)
+                # Для фиктивных точек — жёсткий орб 1° на соединение, независимо от таблицы
+                if t_is_fictitious or n_is_fictitious:
+                    orb_allowed = min(orb_allowed, 1.0)
+
                 exact = abs(diff - asp_deg)
                 if exact <= orb_allowed:
                     direction = "сход." if t_data["deg_abs"] < n_data["deg"] else "расход."
