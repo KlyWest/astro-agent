@@ -61,7 +61,6 @@ PLANET_IDS = {
 SIGNS = ["Овен","Телец","Близнецы","Рак","Лев","Дева",
          "Весы","Скорпион","Стрелец","Козерог","Водолей","Рыбы"]
 
-# Орбисы по планетам
 ORB_TABLE = {
     "Солнце":   {"соединение": 7, "оппозиция": 5, "трин": 5, "квадрат": 4, "секстиль": 4},
     "Луна":     {"соединение": 7, "оппозиция": 5, "трин": 5, "квадрат": 4, "секстиль": 4},
@@ -90,6 +89,8 @@ PRIORITY = {
     "Солнце": 4, "Меркурий": 4, "Венера": 4, "Луна": 4, "Сев.Узел": 4,
 }
 
+FICTITIOUS_POINTS = ["Сев.Узел", "Лилит", "Хирон", "Фортуна"]
+
 def deg_to_sign(deg):
     deg = deg % 360
     idx = int(deg / 30)
@@ -112,8 +113,6 @@ def get_transit_positions(dt_utc):
         }
     return positions
 
-FICTITIOUS_POINTS = ["Сев.Узел", "Лилит", "Хирон", "Фортуна"]
-
 def find_aspects(transits):
     hits = []
     for t_name, t_data in transits.items():
@@ -128,12 +127,10 @@ def find_aspects(transits):
                 diff = 360 - diff
 
             for asp_name, asp_deg in ASPECTS.items():
-                # Если транзитная ИЛИ натальная точка фиктивная — разрешено только соединение
                 if (t_is_fictitious or n_is_fictitious) and asp_name != "соединение":
                     continue
 
                 orb_allowed = orb_rules.get(asp_name, 2)
-                # Для фиктивных точек — жёсткий орб 1° на соединение, независимо от таблицы
                 if t_is_fictitious or n_is_fictitious:
                     orb_allowed = min(orb_allowed, 1.0)
 
@@ -170,6 +167,69 @@ def format_aspects_for_prompt(hits):
         )
     return lines
 
+def calculate_void_of_course(dt_utc):
+    """Вычисляет период Луны без курса если он есть в ближайшие 30 часов."""
+    OTHER_PLANETS = {
+        "Солнце": swe.SUN, "Меркурий": swe.MERCURY, "Венера": swe.VENUS,
+        "Марс": swe.MARS, "Юпитер": swe.JUPITER, "Сатурн": swe.SATURN,
+        "Уран": swe.URANUS, "Нептун": swe.NEPTUNE, "Плутон": swe.PLUTO,
+    }
+    MAJOR_ASPECTS = [0, 60, 90, 120, 180]
+    ORB = 1.0
+    step_minutes = 10
+    hours_ahead = 30
+
+    jd_start = swe.julday(dt_utc.year, dt_utc.month, dt_utc.day, dt_utc.hour + dt_utc.minute / 60)
+    moon_pos_start, _ = swe.calc_ut(jd_start, swe.MOON)
+    start_sign = int(moon_pos_start[0] / 30)
+
+    total_steps = int(hours_ahead * 60 / step_minutes)
+    sign_change_jd = None
+    last_aspect_jd = None
+
+    for i in range(total_steps):
+        jd = jd_start + (i * step_minutes) / (60 * 24)
+        moon_pos, _ = swe.calc_ut(jd, swe.MOON)
+        current_sign = int(moon_pos[0] / 30)
+
+        if current_sign != start_sign:
+            sign_change_jd = jd
+            break
+
+        for pid in OTHER_PLANETS.values():
+            ppos, _ = swe.calc_ut(jd, pid)
+            diff = abs(moon_pos[0] - ppos[0]) % 360
+            if diff > 180:
+                diff = 360 - diff
+            for asp in MAJOR_ASPECTS:
+                if abs(diff - asp) <= ORB:
+                    last_aspect_jd = jd
+
+    if last_aspect_jd is None or sign_change_jd is None:
+        return None
+    if last_aspect_jd >= sign_change_jd:
+        return None
+
+    def jd_to_msk_str(jd):
+        y, m, d, h = swe.revjul(jd)
+        utc_dt = datetime(y, m, d) + timedelta(hours=h)
+        utc_dt = pytz.utc.localize(utc_dt)
+        msk_dt = utc_dt.astimezone(pytz.timezone("Europe/Moscow"))
+        return msk_dt.strftime("%H:%M")
+
+    return {"start": jd_to_msk_str(last_aspect_jd), "end": jd_to_msk_str(sign_change_jd)}
+
+def check_solar_return(transits):
+    """Проверяет, является ли сегодня солнечным возвратом (соляром)."""
+    natal_sun = NATAL["planets_natal"]["Солнце"]["deg"]
+    transit_sun = transits.get("Солнце", {}).get("deg_abs")
+    if transit_sun is None:
+        return False
+    diff = abs(transit_sun - natal_sun) % 360
+    if diff > 180:
+        diff = 360 - diff
+    return diff <= 1.0
+
 def build_natal_summary():
     lines = ["Натальная карта: Олли, 17.11.1990, 13:20, Астрахань",
              "ASC Рыбы 8°58, MC Стрелец 20°08", ""]
@@ -187,7 +247,7 @@ def build_system_prompt(mode="full"):
     if mode == "intro":
         mode_instruction = "\n\n⚠️ РЕЖИМ: Сейчас составляй ТОЛЬКО приветствие, список транзитов и общую картину дня (пункты 1-2-3 из структуры). НЕ пиши блоки сфер и Луну без курса — это будет отдельным запросом."
     elif mode == "spheres":
-        mode_instruction = "\n\n⚠️ РЕЖИМ: Сейчас составляй ТОЛЬКО блок СФЕР (пункт 4) и Луну без курса если есть (пункт 5). НЕ пиши приветствие, список транзитов и общую картину — это уже отправлено отдельно. Начни прямо с 💕 Отношения."
+        mode_instruction = "\n\n⚠️ РЕЖИМ: Сейчас составляй ТОЛЬКО блок СФЕР (пункт 4) и Луну без курса если она передана в данных (пункт 5). НЕ пиши приветствие, список транзитов и общую картину — это уже отправлено отдельно. Начни прямо с 💕 Отношения."
 
     return f"""Ты — личный астролог Оли. Общаешься как близкая подруга которая профессионально знает астрологию. Никакого официоза, никаких умных слов ради умных слов. Язык простой, живой, тёплый. Смайлики везде — щедро.
 
@@ -248,12 +308,6 @@ def build_system_prompt(mode="full"):
 2. Проверь — относится ли дом этой планеты к данной сфере
 3. Если относится — используй именно ЭТОТ дом и его конкретную тему в интерпретации
 4. Если у транзита нет связи с домами сферы — не упоминай этот транзит в этой сфере вообще
-
-Пример правильного хода мысли (не пиши его в ответе, просто думай так):
-Список содержит "Юпитер трин натальный Венера" — натальная Венера в 8 доме.
-8 дом относится к сфере Отношения (интимная жизнь) И к сфере Финансы (чужие деньги) И к сфере Здоровье (неожиданные ситуации).
-Значит в Отношениях пишу про глубину близости, в Финансах — про чужие ресурсы или партнёрские деньги, в Здоровье — про регенерацию.
-НЕ пишу "трин Юпитера и Венеры" в тексте — просто описываю тему дома.
 
 Если натальная планета из транзита НЕ в доме этой сферы — не притягивай транзит искусственно, лучше напиши что сфера сегодня без выраженных акцентов.
 
@@ -320,16 +374,22 @@ def build_system_prompt(mode="full"):
 ❌ "Трин Юпитера и Венеры может принести гармонию в отношения"
 ✅ "сейчас отношения наполняются теплом и пониманием"
 ❌ "Оппозиция Марса Солнцу и Луне может создать напряжение"
-✅ "внутри может copить раздражение которое легко выплеснется на близких"
+✅ "внутри может копиться раздражение которое легко выплеснется на близких"
 ❌ "Трин Сатурна и Юпитера может принести финансовую стабильность"
 ✅ "финансы сейчас на удивление устойчивы, можно строить долгосрочные планы"
 
 Пиши как если бы вообще не упоминала откуда эти ощущения взялись — просто описывай что происходит в жизни.
 
 5. ЛУНА БЕЗ КУРСА
-Если Луна сейчас без курса — напиши блок:
+В данных тебе передаётся точное время VoC если оно есть сегодня — используй ТОЛЬКО это время, не вычисляй и не придумывай сама.
+Если время передано — напиши блок:
 🌙 Луна без курса с ЧЧ:ММ до ЧЧ:ММ МСК — лучше не начинать новых дел, не подписывать договоры, не делать важных покупок.
-Если Луна НЕ без курса — НЕ пиши про это вообще ничего, ни слова, пропусти этот пункт полностью.
+Если в данных написано что VoC сегодня нет — НЕ пиши про это вообще ничего, ни слова, пропусти этот пункт полностью.
+
+═══ ОСОБЫЕ ДАТЫ ═══
+
+17 ноября — день рождения Оли. Если дата прогноза совпадает с 17 ноября — поздравь её тепло в приветствии.
+Если в данных передана информация о соляре (точное возвращение транзитного Солнца на натальное) — обязательно упомяни это как особое событие дня, годовщину солнечного цикла, в общей картине дня.
 
 ═══ СТРУКТУРА ПРОГНОЗА НА НЕДЕЛЮ ═══
 
@@ -402,7 +462,7 @@ def build_system_prompt(mode="full"):
 {mode_instruction}
 """
 
-def generate_forecast(period_label, transits, aspects_raw):
+def generate_forecast(period_label, transits, aspects_raw, voc_data=None, is_solar_return=False):
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     transit_text = "\n".join(
         f"{n}: {d['sign']} {d['deg']}°{'[Ретро]' if d['retro'] else ''}"
@@ -411,13 +471,23 @@ def generate_forecast(period_label, transits, aspects_raw):
     formatted = format_aspects_for_prompt(aspects_raw)
     aspect_text = "\n".join(formatted) if formatted else "Значимых аспектов нет."
 
+    if voc_data:
+        voc_text = f"Луна без курса сегодня: с {voc_data['start']} до {voc_data['end']} МСК"
+    else:
+        voc_text = "Луна без курса сегодня НЕТ — не пиши об этом ничего"
+
+    solar_text = "\n⭐ СЕГОДНЯ СОЛЯР — точное возвращение транзитного Солнца на натальное Солнце! Обязательно упомяни это как особое событие дня." if is_solar_return else ""
+
     base_data = f"""Дата прогноза: {period_label}
 
 Транзитные планеты:
 {transit_text}
 
 Активные аспекты (отсортированы по приоритету и орбу — используй ТОЛЬКО эти данные, ничего не придумывай):
-{aspect_text}"""
+{aspect_text}
+
+{voc_text}
+{solar_text}"""
 
     intro_response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -434,7 +504,7 @@ def generate_forecast(period_label, transits, aspects_raw):
         model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": build_system_prompt(mode="spheres")},
-            {"role": "user", "content": f"{base_data}\n\nСоставь блок СФЕР (Отношения/Работа/Здоровье/Финансы) и Луну без курса если применимо. Для каждой сферы используй ТОЛЬКО те аспекты из списка выше, которые касаются домов этой сферы. Если для сферы нет релевантных аспектов — напиши короткую фразу о фоне, не повторяй один и тот же текст для разных сфер."},
+            {"role": "user", "content": f"{base_data}\n\nСоставь блок СФЕР (Отношения/Работа/Здоровье/Финансы) и Луну без курса если она передана в данных выше. Для каждой сферы используй ТОЛЬКО те аспекты из списка выше, которые касаются домов этой сферы. Если для сферы нет релевантных аспектов — напиши короткую фразу о фоне, не повторяй один и тот же текст для разных сфер."},
         ],
         temperature=0.6,
         max_tokens=1500,
@@ -456,8 +526,10 @@ async def send_daily_forecast(bot):
     now_utc = datetime.utcnow()
     transits = get_transit_positions(now_utc)
     aspects = find_aspects(transits)
+    voc = calculate_void_of_course(now_utc)
+    solar = check_solar_return(transits)
     today_str = datetime.now(pytz.timezone("Europe/Moscow")).strftime("%d.%m.%Y")
-    text = generate_forecast(today_str, transits, aspects)
+    text = generate_forecast(today_str, transits, aspects, voc, solar)
     full = f"🌙 Прогноз на {today_str}\n\n{text}"
     for chunk in send_chunks(full):
         await bot.send_message(chat_id=CHAT_ID, text=chunk)
@@ -485,9 +557,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "today":
         transits = get_transit_positions(now_utc)
         aspects = find_aspects(transits)
+        voc = calculate_void_of_course(now_utc)
+        solar = check_solar_return(transits)
         label = datetime.now(msk).strftime("%d.%m.%Y")
         await query.edit_message_text("✨ Считаю транзиты...")
-        text = generate_forecast(label, transits, aspects)
+        text = generate_forecast(label, transits, aspects, voc, solar)
         full = f"📅 {label}\n\n{text}"
         for chunk in send_chunks(full):
             await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
@@ -496,9 +570,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         day = now_utc + timedelta(days=1)
         transits = get_transit_positions(day)
         aspects = find_aspects(transits)
+        voc = calculate_void_of_course(day)
+        solar = check_solar_return(transits)
         label = (datetime.now(msk) + timedelta(days=1)).strftime("%d.%m.%Y")
         await query.edit_message_text("✨ Считаю транзиты...")
-        text = generate_forecast(label, transits, aspects)
+        text = generate_forecast(label, transits, aspects, voc, solar)
         full = f"📅 Завтра {label}\n\n{text}"
         for chunk in send_chunks(full):
             await context.bot.send_message(chat_id=query.message.chat_id, text=chunk)
@@ -624,7 +700,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     dt_utc = date_from.replace(tzinfo=pytz.utc)
                     transits = get_transit_positions(dt_utc)
                     aspects = find_aspects(transits)
-                    text = generate_forecast(user_text.strip(), transits, aspects)
+                    voc = calculate_void_of_course(dt_utc)
+                    solar = check_solar_return(transits)
+                    text = generate_forecast(user_text.strip(), transits, aspects, voc, solar)
                     full = f"📌 {user_text}\n\n{text}"
                 else:
                     days_data = []
@@ -658,7 +736,9 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 dt_utc = target.replace(tzinfo=pytz.utc)
                 transits = get_transit_positions(dt_utc)
                 aspects = find_aspects(transits)
-                text = generate_forecast(user_text.strip(), transits, aspects)
+                voc = calculate_void_of_course(dt_utc)
+                solar = check_solar_return(transits)
+                text = generate_forecast(user_text.strip(), transits, aspects, voc, solar)
                 full = f"📌 {user_text}\n\n{text}"
 
             for chunk in send_chunks(full):
